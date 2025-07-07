@@ -7,11 +7,11 @@ permissions:
 
 jobs:
   linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        python_version: [3.9.x, 3.11.x]
+        python_version: [3.12.x]
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
@@ -20,7 +20,7 @@ jobs:
         python-version: ${{ matrix.python_version }}
     - name: Setup Python
       run: |
-        python3 -m pip install Cython numpy scipy matplotlib pytest setuptools==69.1.0
+        python3 -m pip install Cython numpy scipy matplotlib pytest setuptools==69.1.0 wheel auditwheel
     - name: Install system
       run: |
         sudo apt-get -y install cmake liblapack-dev libsuitesparse-dev libhypre-dev
@@ -35,12 +35,11 @@ jobs:
         sudo make install
     - name: Install sundials
       run: |
-        git clone --depth 1 -b v2.7.0 https://github.com/LLNL/sundials /tmp/sundials
+        git clone --depth 1 -b v7.3.0 https://github.com/LLNL/sundials /tmp/sundials
         cd /tmp/sundials
-        echo "target_link_libraries(sundials_idas_shared lapack blas superlu_mt_OPENMP)" >> src/idas/CMakeLists.txt
-        echo "target_link_libraries(sundials_kinsol_shared lapack blas superlu_mt_OPENMP)" >> src/kinsol/CMakeLists.txt
-        cmake -LAH -DSUPERLUMT_BLAS_LIBRARIES=blas -DSUPERLUMT_INCLUDE_DIR=/usr/include -DSUPERLUMT_LIBRARY=/usr/lib/libsuperlu_mt_OPENMP.a -DSUPERLUMT_THREAD_TYPE=OpenMP -DCMAKE_INSTALL_PREFIX=/usr -DSUPERLUMT_ENABLE=ON -DLAPACK_ENABLE=ON -DEXAMPLES_ENABLE=OFF -B build .
-        cd build
+        if test "${{ matrix.sundials_version }}" = "2.7.0"; then echo "target_link_libraries(sundials_idas_shared lapack blas superlu_mt_OPENMP)" >> src/idas/CMakeLists.txt; echo "target_link_libraries(sundials_kinsol_shared lapack blas superlu_mt_OPENMP)" >> src/kinsol/CMakeLists.txt; fi
+        mkdir build && cd build
+        cmake -LAH -DSUPERLUMT_BLAS_LIBRARIES=blas -DSUPERLUMT_LIBRARIES=blas -DSUPERLUMT_INCLUDE_DIR=/usr/include -DSUPERLUMT_LIBRARY=/usr/lib/libsuperlu_mt_OPENMP.a -DSUPERLUMT_THREAD_TYPE=OpenMP -DCMAKE_INSTALL_PREFIX=/usr -DSUPERLUMT_ENABLE=ON -DLAPACK_ENABLE=ON -DEXAMPLES_ENABLE=OFF -DEXAMPLES_ENABLE_C=OFF -DBUILD_STATIC_LIBS=OFF -DSUNDIALS_INDEX_SIZE=32 ..
         make -j4
         sudo make install
     - name: Install assimulo
@@ -59,6 +58,16 @@ jobs:
         make -j4
         sudo make install
     - name: Build
-      run: python3 setup.py install --user --fmil-home=/usr
-    - name: Test
-      run: pytest 
+      run: python3 setup.py bdist_wheel --fmil-home=/usr
+    # Tests are currently failing on Python 3.12 due to the following:
+    # https://github.com/modelon-community/Assimulo/issues/106
+    # - name: Test
+    #   run: pytest
+    - name: Auditwheel
+      run: |
+        auditwheel repair dist/*.whl --plat manylinux_2_35_x86_64 -w dist/ --only-plat
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-artifacts
+        path: dist/*.whl
